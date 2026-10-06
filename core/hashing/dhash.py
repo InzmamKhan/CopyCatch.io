@@ -1,25 +1,31 @@
 from pathlib import Path
+from typing import Union
 import numpy as np
 from PIL import Image
 from core.hashing.base import BaseHasher
 
-class DifferenceHasher(BaseHasher):
+class dhash(BaseHasher):
     def __init__(self, hash_size: int = 8):
         self.hash_size = hash_size
 
-    def compute_hash(self, image_path: str | Path) -> int:
+    def compute_hash(self, image: Union[Image.Image, str, Path]) -> int:
         """
         Computes a 64-bit Difference Hash (dHash).
-        Resizes to (hash_size + 1) x hash_size, converts to grayscale,
-        and measures relative pixel intensity gradients between adjacent columns.
+        Accepts either a pre-loaded PIL Image or an image file path.
         """
-        with Image.open(image_path) as img:
-            # Resize to 9x8 for an 8x8 difference matrix (64 bits)
-            resized = img.convert("L").resize(
+        if isinstance(image, (str, Path)):
+            with Image.open(image) as img:
+                resized = img.convert("L").resize(
+                    (self.hash_size + 1, self.hash_size), 
+                    Image.Resampling.LANCZOS
+                )
+        else:
+            resized = image.convert("L").resize(
                 (self.hash_size + 1, self.hash_size), 
                 Image.Resampling.LANCZOS
             )
-            pixels = np.asarray(resized, dtype=np.int32)
+
+        pixels = np.asarray(resized, dtype=np.int32)
 
         # Compute differences between adjacent column pixels (left > right)
         diff = pixels[:, :-1] > pixels[:, 1:]
