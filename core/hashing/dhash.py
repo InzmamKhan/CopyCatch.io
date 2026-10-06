@@ -27,9 +27,7 @@ class dhash(BaseHasher):
 
         pixels = np.asarray(resized, dtype=np.int32)
 
-        # Compute differences between adjacent column pixels (left > right)
         diff = pixels[:, :-1] > pixels[:, 1:]
 
-        # Convert boolean matrix to 64-bit integer
         bit_string = "".join(["1" if bit else "0" for bit in diff.flatten()])
         return int(bit_string, 2)

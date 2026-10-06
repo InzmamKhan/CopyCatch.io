@@ -4,8 +4,8 @@ import numpy as np
 
 from core.models import ImageItem, DuplicateGroup
 from core.image_loader import ImageLoader
-from core.hashing.phash import phash as PHash
-from core.hashing.dhash import dhash as DHash
+from core.hashing.phash import phash
+from core.hashing.dhash import dhash
 from core.indexer.faiss_index import BinaryFaissIndex
 from core.ml.onnx_verifier import ONNXVerifier
 from core.grouping.graph_cluster import GraphClusterer

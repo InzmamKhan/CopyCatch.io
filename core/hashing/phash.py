@@ -17,7 +17,6 @@ class phash(BaseHasher):
         """
         img_size = self.hash_size * self.highfreq_factor
         
-        # Check if input is a file path or PIL Image instance
         if isinstance(image, (str, Path)):
             with Image.open(image) as img:
                 gray_img = img.convert("L").resize((img_size, img_size), Image.Resampling.LANCZOS)
@@ -26,14 +25,11 @@ class phash(BaseHasher):
 
         img_array = np.asarray(gray_img, dtype=np.float32)
 
-        # 2D DCT calculation
         dct = scipy.fftpack.dct(scipy.fftpack.dct(img_array, axis=0, norm='ortho'), axis=1, norm='ortho')
         dct_low_freq = dct[:self.hash_size, :self.hash_size]
 
-        # Median thresholding
         med = np.median(dct_low_freq)
         diff = dct_low_freq > med
 
-        # Pack boolean matrix into 64-bit integer
         bit_string = "".join(["1" if val else "0" for val in diff.flatten()])
         return int(bit_string, 2)
