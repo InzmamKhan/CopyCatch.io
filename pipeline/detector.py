@@ -1,62 +1,113 @@
-from typing import List
-from config.settings import settings
+from pathlib import Path
+from typing import List, Union
+import numpy as np
+
 from core.models import ImageItem, DuplicateGroup
 from core.image_loader import ImageLoader
-from core.hashing.phash import PerceptualHasher
+from core.hashing.phash import PHash
+from core.hashing.dhash import DHash
 from core.indexer.faiss_index import BinaryFaissIndex
 from core.ml.onnx_verifier import ONNXVerifier
 from core.grouping.graph_cluster import GraphClusterer
+from config.settings import settings
 
 class DuplicateDetectorPipeline:
-    def __init__(self):
-        self.hasher = PerceptualHasher()
-        self.verifier = None
+    """Core pipeline coordinating hashing, indexing, verification, and clustering."""
 
-    def run(self, folder_path: str) -> List[DuplicateGroup]:
-        # Step 1: Scan Directory
-        images = ImageLoader.scan_directory(folder_path)
-        if not images:
+    def __init__(self):
+        self.phash = PHash()
+        self.dhash = DHash()
+        self.verifier = ONNXVerifier()
+        self.clusterer = GraphClusterer()
+
+    def run(self, folder_path: Union[str, Path]) -> List[DuplicateGroup]:
+        """Scans a local directory for duplicate images."""
+        folder = Path(folder_path)
+        if not folder.exists() or not folder.is_dir():
             return []
 
-        # Step 2: Compute pHash for all images
-        hashes = []
-        for img in images:
-            img.hash_val = self.hasher.compute_hash(img.path)
-            hashes.append(img.hash_val)
+        image_paths = [
+            p for p in folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in settings.SUPPORTED_EXTENSIONS
+        ]
 
-        # Step 3: Fast Binary Indexing in FAISS
-        faiss_idx = BinaryFaissIndex(bit_dim=64)
-        faiss_idx.add_hashes(hashes)
-        
-        limits, distances, indices = faiss_idx.range_search(settings.AMBIGUOUS_THRESHOLD)
+        processed_images = []
+        for path in image_paths:
+            try:
+                img = ImageLoader.load_image(path)
+                phash_val = self.phash.compute_hash(img)
+                dhash_val = self.dhash.compute_hash(img)
+                combined_hash = (phash_val << 64) | dhash_val
+                
+                item = ImageItem(
+                    path=path,
+                    filename=path.name,
+                    hash_val=combined_hash
+                )
+                processed_images.append(item)
+            except Exception:
+                continue
 
-        # Step 4: Evaluate Pairs & Trigger ONNX for edge cases
-        match_pairs = []
-        
-        for i in range(len(images)):
-            start, end = limits[i], limits[i + 1]
-            for j in range(start, end):
-                neighbor_idx = indices[j]
-                dist = distances[j]
+        return self._process_items(processed_images)
 
-                if neighbor_idx <= i:
-                    continue  # Skip self-matches and duplicate symmetry
+    def run_from_uploads(self, uploaded_files) -> List[DuplicateGroup]:
+        """Processes in-memory uploaded image streams from Streamlit."""
+        processed_images = []
 
-                if dist <= settings.DIRECT_DUPLICATE_THRESHOLD:
-                    match_pairs.append((i, neighbor_idx))
-                elif settings.DIRECT_DUPLICATE_THRESHOLD < dist <= settings.AMBIGUOUS_THRESHOLD:
-                    # Edge Case: Fall back to ONNX embedding check
-                    if self.verifier is None:
-                        self.verifier = ONNXVerifier()
+        for file_obj in uploaded_files:
+            try:
+                img = ImageLoader.load_image(file_obj)
+                phash_val = self.phash.compute_hash(img)
+                dhash_val = self.dhash.compute_hash(img)
+                combined_hash = (phash_val << 64) | dhash_val
 
-                    if images[i].embedding is None:
-                        images[i].embedding = self.verifier.extract_embedding(images[i].path)
-                    if images[neighbor_idx].embedding is None:
-                        images[neighbor_idx].embedding = self.verifier.extract_embedding(images[neighbor_idx].path)
+                item = ImageItem(
+                    path=file_obj,
+                    filename=file_obj.name,
+                    hash_val=combined_hash
+                )
+                processed_images.append(item)
+            except Exception:
+                continue
 
-                    sim = self.verifier.calculate_similarity(images[i].embedding, images[neighbor_idx].embedding)
-                    if sim >= settings.COSINE_SIMILARITY_THRESHOLD:
-                        match_pairs.append((i, neighbor_idx))
+        return self._process_items(processed_images)
 
-        # Step 5: Connected Components Graph Clustering (Returns only duplicate groups)
-        return GraphClusterer.cluster_matches(images, match_pairs)
+    def _process_items(self, items: List[ImageItem]) -> List[DuplicateGroup]:
+        """Executes indexing, FAISS search, ONNX verification, and graph clustering."""
+        if not items:
+            return []
+
+        indexer = BinaryFaissIndex(dimension_bits=128)
+        hashes = [item.hash_val for item in items]
+        indexer.build_index(hashes)
+
+        candidate_pairs = indexer.search_range(max_distance=settings.AMBIGUOUS_THRESHOLD)
+
+        confirmed_edges = []
+        for i, j, dist in candidate_pairs:
+            if dist <= settings.DIRECT_DUPLICATE_THRESHOLD:
+                confirmed_edges.append((i, j))
+            else:
+                img_i = ImageLoader.load_image(items[i].path)
+                img_j = ImageLoader.load_image(items[j].path)
+
+                emb_i = self.verifier.extract_embedding(img_i)
+                emb_j = self.verifier.extract_embedding(img_j)
+
+                similarity = self.verifier.compute_cosine_similarity(emb_i, emb_j)
+                if similarity >= settings.COSINE_SIMILARITY_THRESHOLD:
+                    confirmed_edges.append((i, j))
+
+        num_nodes = len(items)
+        clusters = self.clusterer.cluster(num_nodes, confirmed_edges)
+
+        duplicate_groups = []
+        group_id_counter = 1
+        for cluster_indices in clusters:
+            group_images = [items[idx] for idx in cluster_indices]
+            duplicate_groups.append(
+                DuplicateGroup(group_id=group_id_counter, images=group_images)
+            )
+            group_id_counter += 1
+
+        return duplicate_groups

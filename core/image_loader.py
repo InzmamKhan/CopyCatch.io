@@ -1,38 +1,23 @@
-from pathlib import Path
-from typing import List
 from PIL import Image
-from config.settings import settings
-from core.models import ImageItem
+from pathlib import Path
+import io
+from typing import Union, Any
 
 class ImageLoader:
-    @staticmethod
-    def scan_directory(folder_path: str | Path) -> List[ImageItem]:
-        """Recursively scans directory for supported image files."""
-        folder = Path(folder_path)
-        if not folder.exists() or not folder.is_dir():
-            return []
-
-        image_items = []
-        item_id = 0
-        
-        # Recursive scanning using rglob
-        for path in folder.rglob("*"):
-            if path.is_file() and path.suffix.lower() in settings.SUPPORTED_EXTENSIONS:
-                image_items.append(
-                    ImageItem(
-                        id=item_id,
-                        path=path,
-                        filename=path.name
-                    )
-                )
-                item_id += 1
-
-        return image_items
+    """Utility class for loading images and generating thumbnails from disk paths or uploaded file streams."""
 
     @staticmethod
-    def create_thumbnail(image_path: Path) -> Image.Image:
-        """Generates a lightweight in-memory PIL Thumbnail."""
-        with Image.open(image_path) as img:
-            img_copy = img.convert("RGB").copy()
-            img_copy.thumbnail(settings.THUMBNAIL_SIZE)
-            return img_copy
+    def load_image(source: Union[str, Path, Any]) -> Image.Image:
+        """Loads an image from either a file path or a Streamlit UploadedFile object."""
+        if isinstance(source, (str, Path)):
+            return Image.open(source).convert("RGB")
+        else:
+            source.seek(0)
+            return Image.open(io.BytesIO(source.read())).convert("RGB")
+
+    @staticmethod
+    def create_thumbnail(source: Union[str, Path, Any], max_size: tuple = (200, 200)) -> Image.Image:
+        """Generates a PIL image thumbnail for UI previews."""
+        img = ImageLoader.load_image(source)
+        img.thumbnail(max_size)
+        return img

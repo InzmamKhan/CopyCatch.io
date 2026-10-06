@@ -1,6 +1,5 @@
 import streamlit as st
 import time
-from ui.components.folder_picker import open_folder_dialog
 from ui.components.stats_bar import render_stats_bar
 from ui.components.group_card import render_group_card
 from pipeline.detector import DuplicateDetectorPipeline
@@ -10,25 +9,17 @@ def render():
     st.set_page_config(page_title="CopyCatch.io", layout="wide")
     st.title("CopyCatch.io — Sub-Millisecond Duplicate Detector")
 
-    if "selected_folder" not in st.session_state:
-        st.session_state.selected_folder = ""
     if "results" not in st.session_state:
         st.session_state.results = None
 
-    # Top Folder Selection Panel
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.text_input("Target Folder", value=st.session_state.selected_folder, disabled=True)
-    with col2:
-        st.write(" ")
-        if st.button("📁 Select Folder"):
-            folder = open_folder_dialog()
-            if folder:
-                st.session_state.selected_folder = folder
-                st.session_state.results = None
+    uploaded_files = st.file_uploader(
+        "Upload Images to Scan",
+        type=["jpg", "jpeg", "png", "webp", "bmp"],
+        accept_multiple_files=True,
+        help="Drag & drop images or select a batch of files from your folder."
+    )
 
-    # Advanced Scan Parameters Setup
-    with st.expander("⚙️ Advanced Scan Settings & Filters", expanded=True):
+    with st.expander("⚙️ Advanced Scan Settings", expanded=False):
         col_a, col_b, col_c = st.columns(3)
         
         with col_a:
@@ -54,30 +45,21 @@ def render():
                 help="Minimum visual similarity required from ONNX embeddings to group images."
             )
 
-        selected_exts = st.multiselect(
-            "Target Extensions",
-            options=[".jpg", ".jpeg", ".png", ".webp", ".bmp"],
-            default=[".jpg", ".jpeg", ".png", ".webp", ".bmp"],
-            help="Filter which file types CopyCatch will process."
-        )
-
-    if st.session_state.selected_folder:
+    if uploaded_files:
         if st.button("🚀 Scan for Duplicates", type="primary"):
-            # Update settings dynamically for current run
             settings.DIRECT_DUPLICATE_THRESHOLD = direct_thresh
             settings.AMBIGUOUS_THRESHOLD = ambiguous_thresh
             settings.COSINE_SIMILARITY_THRESHOLD = cosine_thresh
-            settings.SUPPORTED_EXTENSIONS = tuple(selected_exts)
 
             with st.spinner("Analyzing image hashes & searching for duplicates..."):
                 start_time = time.time()
                 pipeline = DuplicateDetectorPipeline()
-                dup_groups = pipeline.run(st.session_state.selected_folder)
+                
+                dup_groups = pipeline.run_from_uploads(uploaded_files)
                 elapsed = time.time() - start_time
                 
                 st.session_state.results = (dup_groups, elapsed)
 
-    # Display Duplicate Groups
     if st.session_state.results:
         dup_groups, elapsed = st.session_state.results
         total_dup_images = sum(len(g.images) for g in dup_groups)
@@ -92,7 +74,7 @@ def render():
         st.subheader("Duplicate Clusters")
         
         if not dup_groups:
-            st.info("No duplicates detected in this directory with the current settings.")
+            st.info("No duplicates detected in this batch with current settings.")
         else:
             for group in dup_groups:
                 render_group_card(group)
